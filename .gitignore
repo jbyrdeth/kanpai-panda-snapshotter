@@ -213,4 +213,8 @@ Desktop.ini
 # Backup files
 *.bak
 *.backup
+<<<<<<< HEAD
 *.old 
+=======
+*.old
+>>>>>>> ac288e2b3dd0171db0187b7b35a447099e26c209

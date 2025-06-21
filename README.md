@@ -52,4 +52,8 @@ Creates CSV files with holder addresses and token counts:
 - Node.js 14+
 - Moralis API key (for Ethereum/EVM chains)
 - Helius API key (for Solana)
+<<<<<<< HEAD
 - Ethereum RPC URL 
+=======
+- Ethereum RPC URL
+>>>>>>> ac288e2b3dd0171db0187b7b35a447099e26c209

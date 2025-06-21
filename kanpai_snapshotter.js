@@ -1074,4 +1074,8 @@ module.exports = {
 // Auto-execute if this is the main module
 if (require.main === module) {
   main();
+<<<<<<< HEAD
 } 
+=======
+}
+>>>>>>> ac288e2b3dd0171db0187b7b35a447099e26c209

@@ -1,6 +1,7 @@
 {
   "name": "kanpai-panda-snapshotter",
   "version": "1.0.0",
+<<<<<<< HEAD
   "main": "infinitysnapshotter.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -9,6 +10,17 @@
   "author": "",
   "license": "ISC",
   "description": "",
+=======
+  "main": "kanpai_snapshotter.js",
+  "scripts": {
+    "start": "node kanpai_snapshotter.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["nft", "snapshotter", "ethereum", "solana", "blockchain", "kanpai", "panda"],
+  "author": "",
+  "license": "ISC",
+  "description": "NFT holder snapshotter for Kanpai Panda collections across multiple blockchains",
+>>>>>>> ac288e2b3dd0171db0187b7b35a447099e26c209
   "dependencies": {
     "axios": "^1.10.0",
     "csv-parser": "^3.2.0",
@@ -16,4 +28,8 @@
     "dotenv": "^16.5.0",
     "ethers": "^6.14.4"
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> ac288e2b3dd0171db0187b7b35a447099e26c209
