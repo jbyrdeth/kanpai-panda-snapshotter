@@ -39,6 +39,7 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "200");
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "25");
 const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || "30");
+const SOLANA_MAX_CONCURRENT = parseInt(process.env.SOLANA_MAX_CONCURRENT || "10"); // Balanced for Solana
 
 // Contract configurations
 const CONTRACTS = {
@@ -53,7 +54,7 @@ const CONTRACTS = {
     chains: ["ethereum", "arbitrum", "optimism", "bsc", "polygon", "fantom", "avalanche"]
   },
   solanaPanda: {
-    inputFile: "Solana Panda Earnings.csv",
+    inputFile: "Solana Panda IDs.csv",
     heliusRpc: `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
   }
 };
@@ -168,19 +169,20 @@ class InfinitySnapshotter {
       
       const results = await this.getTokenOwnerBatch(snapshotBlock, batch);
       
+      let batchFound = 0;
       for (const result of results) {
         if (result.owner && result.owner !== ethers.ZeroAddress) {
-          console.log(`✅ Found Token ${result.tokenId} | Owner: ${result.owner}`);
           finalSnapshot[result.tokenId] = {
             owner: result.owner,
             block: snapshotBlock
           };
           totalFound++;
+          batchFound++;
         } else {
-          console.log(`❌ Token ${result.tokenId} not found`);
           tokensToRecheck.add(result.tokenId);
         }
       }
+      console.log(`   Found ${batchFound}/${batch.length} tokens in this batch`);
       
       const processedTokens = Math.min(batchEnd, this.totalSupply);
       const elapsedMinutes = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -228,7 +230,6 @@ class InfinitySnapshotter {
             if (!tokensToRecheck.has(result.tokenId)) continue;
             
             if (result.owner && result.owner !== ethers.ZeroAddress) {
-              console.log(`✅ Found Token ${result.tokenId} in pass ${pass} | Owner: ${result.owner}`);
               finalSnapshot[result.tokenId] = {
                 owner: result.owner,
                 block: snapshotBlock
@@ -248,10 +249,10 @@ class InfinitySnapshotter {
     // Clean up old snapshot files
     const files = fs.readdirSync('.');
     const oldSnapshots = files.filter(file => file.startsWith('Infinity Holders') && file.endsWith('.csv'));
-    oldSnapshots.forEach(file => {
-      fs.unlinkSync(file);
-      console.log(`Removing old snapshot: ${file}`);
-    });
+    if (oldSnapshots.length > 0) {
+      oldSnapshots.forEach(file => fs.unlinkSync(file));
+      console.log(`Cleaned up ${oldSnapshots.length} old snapshot file(s)`);
+    }
 
     // Generate CSV output with current date
     const now = new Date();
@@ -395,6 +396,7 @@ class PandaSnapshotter {
       
       const chainResults = await Promise.all(chainPromises);
       
+            let batchFound = 0;
       for (const tokenId of batch) {
         let foundOnChain = false;
         
@@ -405,7 +407,6 @@ class PandaSnapshotter {
           const result = results.find(r => r.tokenId === tokenId);
           
           if (result?.owner && result.owner !== ethers.ZeroAddress) {
-            console.log(`✅ Found Token ${tokenId} on ${chainName} | Owner: ${result.owner}`);
             finalSnapshot[tokenId] = {
               owner: result.owner,
               chain: chainName,
@@ -413,15 +414,16 @@ class PandaSnapshotter {
             };
             chainStats[chainName]++;
             foundOnChain = true;
+            batchFound++;
             break;
           }
         }
         
         if (!foundOnChain) {
-          console.log(`❌ Token ${tokenId} not found on any chain`);
           tokensToRecheck.add(tokenId);
         }
       }
+      console.log(`   Found ${batchFound}/${batch.length} tokens in this batch`);
       
       const processedTokens = Math.min(batchEnd, this.totalSupply);
       const elapsedMinutes = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -482,7 +484,6 @@ class PandaSnapshotter {
               const result = results?.find(r => r.tokenId === tokenId);
               
               if (result?.owner && result.owner !== ethers.ZeroAddress) {
-                console.log(`✅ Found Token ${tokenId} on ${chainName} in pass ${pass} | Owner: ${result.owner}`);
                 finalSnapshot[tokenId] = {
                   owner: result.owner,
                   chain: chainName,
@@ -495,6 +496,11 @@ class PandaSnapshotter {
               }
             }
           }
+        }
+        
+        if (pass < 3) {
+          const remainingTokens = tokensToRecheck.size;
+          console.log(`   Pass ${pass} completed: ${remainingTokens} tokens still need retry`);
         }
       }
     }
@@ -509,12 +515,11 @@ class PandaSnapshotter {
 
     // Clean up old files
     const files = fs.readdirSync('.');
-    files.forEach(file => {
-      if (file.startsWith('Panda Holders') && file.endsWith('.csv')) {
-        console.log(`Removing old snapshot: ${file}`);
-        fs.unlinkSync(file);
-      }
-    });
+    const oldFiles = files.filter(file => file.startsWith('Panda Holders') && file.endsWith('.csv'));
+    if (oldFiles.length > 0) {
+      oldFiles.forEach(file => fs.unlinkSync(file));
+      console.log(`Cleaned up ${oldFiles.length} old snapshot file(s)`);
+    }
 
     // Create CSV data
     const csvData = [];
@@ -592,8 +597,10 @@ class PandaSnapshotter {
  */
 class SolanaPandaSnapshotter {
   constructor() {
-    this.maxConcurrent = MAX_CONCURRENT;
+    this.maxConcurrent = SOLANA_MAX_CONCURRENT;
     this.activeRequests = 0;
+    this.rateLimitDelay = 100; // Base delay between requests
+    this.lastRequestTime = 0;
     this.headers = {
       "Content-Type": "application/json",
       "User-Agent": "SolanaPandaOwnershipBot/1.0"
@@ -605,6 +612,15 @@ class SolanaPandaSnapshotter {
     while (this.activeRequests >= this.maxConcurrent) {
       await sleep(100);
     }
+    
+    // Rate limiting - ensure minimum delay between requests
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    if (timeSinceLastRequest < this.rateLimitDelay) {
+      await sleep(this.rateLimitDelay - timeSinceLastRequest);
+    }
+    this.lastRequestTime = Date.now();
+    
     this.activeRequests++;
   }
 
@@ -642,7 +658,8 @@ class SolanaPandaSnapshotter {
         
         if (response.status === 429) {
           this.releaseSlot();
-          await sleep(retryDelay * (attempt + 2));
+          const backoffDelay = retryDelay * Math.pow(2, attempt + 1); // Exponential backoff
+          await sleep(backoffDelay);
           continue;
         }
         
@@ -678,7 +695,8 @@ class SolanaPandaSnapshotter {
         
         if (ownerResponse.status === 429) {
           this.releaseSlot();
-          await sleep(retryDelay * (attempt + 2));
+          const backoffDelay = retryDelay * Math.pow(2, attempt + 1); // Exponential backoff
+          await sleep(backoffDelay);
           continue;
         }
         
@@ -690,10 +708,9 @@ class SolanaPandaSnapshotter {
         
         const accountData = ownerResponse.data.result.value;
         if (accountData && accountData.data && accountData.data.parsed) {
-          const owner = accountData.data.parsed.info.owner;
-          console.log(`✅ Found owner ${owner} for mint ${mintAddress}`);
-          this.releaseSlot();
-          return owner;
+                  const owner = accountData.data.parsed.info.owner;
+        this.releaseSlot();
+        return owner;
         }
         
         this.releaseSlot();
@@ -702,11 +719,20 @@ class SolanaPandaSnapshotter {
         
       } catch (error) {
         this.releaseSlot();
-        console.error(`Error processing mint ${mintAddress} (attempt ${attempt + 1}/${maxRetries}): ${error.message}`);
         
         if (error.response && error.response.status === 429) {
-          await sleep(retryDelay * (attempt + 2));
+          const backoffDelay = retryDelay * Math.pow(2, attempt + 1); // Exponential backoff
+          // Only show rate limit message on first attempt and not too frequently
+          if (attempt === 0 && Math.random() < 0.1) { // Show ~10% of rate limit messages
+            console.log(`   Rate limited, backing off...`);
+          }
+          await sleep(backoffDelay);
           continue;
+        }
+        
+        // Only log non-rate-limit errors
+        if (attempt === maxRetries - 1) { // Only log on final attempt
+          console.error(`Failed to process mint ${mintAddress}: ${error.message}`);
         }
         
         if (attempt < maxRetries - 1) {
@@ -716,7 +742,10 @@ class SolanaPandaSnapshotter {
       }
     }
     
-    console.error(`❌ Failed to get owner for mint ${mintAddress} after ${maxRetries} attempts`);
+    // Only log final failure occasionally to avoid spam
+    if (Math.random() < 0.1) {
+      console.error(`❌ Failed to get owner for some mints after ${maxRetries} attempts`);
+    }
     return null;
   }
 
@@ -743,7 +772,7 @@ class SolanaPandaSnapshotter {
     });
   }
 
-  async processEarningsCSV(inputFile = CONTRACTS.solanaPanda.inputFile) {
+  async processIDMappingCSV(inputFile = CONTRACTS.solanaPanda.inputFile) {
     try {
       console.log(`Reading CSV file: ${inputFile}`);
       const data = await this.readCSV(inputFile);
@@ -770,9 +799,10 @@ class SolanaPandaSnapshotter {
       
       const startTime = Date.now();
       
-      // Process in batches
-      for (let startIdx = 0; startIdx < validData.length; startIdx += BATCH_SIZE) {
-        const endIdx = Math.min(startIdx + BATCH_SIZE, validData.length);
+              // Process in smaller batches for Solana to avoid rate limits
+        const solanaBatchSize = Math.min(BATCH_SIZE, 15); // Max 15 at a time for Solana
+      for (let startIdx = 0; startIdx < validData.length; startIdx += solanaBatchSize) {
+        const endIdx = Math.min(startIdx + solanaBatchSize, validData.length);
         const batch = validData.slice(startIdx, endIdx);
         
         console.log(`\nProcessing batch ${startIdx + 1}-${endIdx}...`);
@@ -784,18 +814,13 @@ class SolanaPandaSnapshotter {
           
           const owner = await this.getNFTOwner(row.SolanaTokenId);
           row.OwnerWallet = owner;
-          
-          if (owner) {
-            console.log(`✅ Found owner ${owner} for mint ${row.SolanaTokenId}`);
-          } else {
-            console.warn(`❌ Could not find owner for token ${row.SolanaTokenId}`);
-          }
         });
         
         await Promise.all(batchPromises);
         
-        console.log(`Processed ${endIdx}/${validData.length} NFTs`);
-        await sleep(200);
+        const batchFound = batch.filter(row => row.OwnerWallet).length;
+        console.log(`   Batch ${startIdx + 1}-${endIdx}: Found ${batchFound}/${batch.length} owners | Progress: ${endIdx}/${validData.length} NFTs`);
+                  await sleep(200); // Balanced delay between batches for Solana
       }
       
       return await this.generateOutput(validData, startTime);
@@ -809,12 +834,11 @@ class SolanaPandaSnapshotter {
   async generateOutput(validData, startTime) {
     // Clean up old files
     const files = fs.readdirSync('.');
-    files.forEach(file => {
-      if (file.startsWith('Solana Panda Holders') && file.endsWith('.csv')) {
-        console.log(`Removing old snapshot: ${file}`);
-        fs.unlinkSync(file);
-      }
-    });
+    const oldFiles = files.filter(file => file.startsWith('Solana Panda Holders') && file.endsWith('.csv'));
+    if (oldFiles.length > 0) {
+      oldFiles.forEach(file => fs.unlinkSync(file));
+      console.log(`Cleaned up ${oldFiles.length} old snapshot file(s)`);
+    }
     
     const now = new Date();
     const month = now.getMonth() + 1;
@@ -888,7 +912,7 @@ class KanpaiSnapshotter {
     console.log("   - Contract: 0xaCF63E56fd08970b43401492a02F6F38B6635C91");
     console.log("");
     console.log("3. Solana Panda Snapshotter");
-    console.log("   - Reads from Solana Panda Earnings.csv");
+    console.log("   - Reads from Solana Panda IDs.csv");
     console.log("   - Uses Helius API for Solana blockchain");
     console.log("");
     console.log("4. Run All Snapshotters (Sequential)");
@@ -949,7 +973,7 @@ class KanpaiSnapshotter {
         throw new Error(`Input file not found: ${CONTRACTS.solanaPanda.inputFile}`);
       }
       
-      return await this.solanaPandaSnapshotter.processEarningsCSV();
+      return await this.solanaPandaSnapshotter.processIDMappingCSV();
     } catch (error) {
       console.error("Error in Solana snapshotter:", error.message);
       throw error;
